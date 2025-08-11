@@ -6,17 +6,17 @@ export const GAME_CONFIG = {
   GROUND_HEIGHT: 200,
   JUMP_FORCE: -15,
   GRAVITY: 0.8,
-  BASE_SPEED: 2,
+  BASE_SPEED: 3,
   SPEED_INCREASE_PER_LEVEL: 0.3,
   POINTS_PER_LEVEL: 500,
   MAX_LIVES: 3,
   OBSTACLE_SPAWN_DISTANCE: 200,
-  POWERUP_SPAWN_CHANCE: 0.15,
-  COIN_SPAWN_CHANCE: 0.3,
+  POWERUP_SPAWN_CHANCE: 0.008,
+  COIN_SPAWN_CHANCE: 0.015,
 };
 
 export const DIFFICULTY_MULTIPLIERS = {
-  easy: { speed: 0.8, obstacles: 0.7, powerups: 1.3 },
+  easy: { speed: 0.8, obstacles: 0.8, powerups: 1.3 },
   medium: { speed: 1.0, obstacles: 1.0, powerups: 1.0 },
   hard: { speed: 1.3, obstacles: 1.4, powerups: 0.8 },
   extreme: { speed: 1.6, obstacles: 1.8, powerups: 0.6 },

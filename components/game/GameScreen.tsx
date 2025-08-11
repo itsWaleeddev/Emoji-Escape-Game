@@ -1,20 +1,17 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { View, StyleSheet, Dimensions, Text, Pressable, Platform } from 'react-native';
+import { View, StyleSheet, Dimensions, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
-  useAnimatedStyle,
   useSharedValue,
-  withSpring,
-  interpolate,
+  useAnimatedStyle,
   runOnJS,
 } from 'react-native-reanimated';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { Accelerometer } from 'expo-sensors';
-import { Player, GameState, ActivePowerUp } from '@/types/game';
-import { GameEngine } from '@/utils/gameEngine';
+import { Player, GameState, Obstacle, PowerUp, Coin } from '@/types/game';
 import { StorageManager } from '@/utils/storage';
-import { GAME_CONFIG, DIFFICULTY_MULTIPLIERS, LEVEL_BACKGROUNDS, POWER_UP_CONFIGS } from '@/constants/game';
+import { GAME_CONFIG, DIFFICULTY_MULTIPLIERS, LEVEL_BACKGROUNDS, PLAYER_SKINS } from '@/constants/game';
 import { PlayerEmoji } from './PlayerEmoji';
 import { ObstacleComponent } from './ObstacleComponent';
 import { PowerUpComponent } from './PowerUpComponent';
@@ -39,8 +36,8 @@ export const GameScreen: React.FC<Props> = ({
   selectedSkin,
   difficulty
 }) => {
-  const gameEngine = useRef(new GameEngine(difficulty)).current;
-  const difficultyConfig = DIFFICULTY_MULTIPLIERS[difficulty] ?? DIFFICULTY_MULTIPLIERS.easy;
+  const difficultyConfig = DIFFICULTY_MULTIPLIERS[difficulty];
+  
   const [settings, setSettings] = useState({
     soundEnabled: true,
     vibrationEnabled: true,
@@ -65,20 +62,28 @@ export const GameScreen: React.FC<Props> = ({
     emoji: selectedSkin,
     position: {
       x: SCREEN_WIDTH / 2,
-      y: SCREEN_HEIGHT - GAME_CONFIG.GROUND_HEIGHT
+      y: SCREEN_HEIGHT - 150
     },
     lane: 1,
     isJumping: false,
     velocity: { x: 0, y: 0 },
   });
 
-  const [lastScore, setLastScore] = useState(0);
-  const [bestScore, setBestScore] = useState(0);
-  const [totalCoins, setTotalCoins] = useState(0);
+  // Game objects
+  const [obstacles, setObstacles] = useState<Obstacle[]>([]);
+  const [powerUps, setPowerUps] = useState<PowerUp[]>([]);
+  const [coins, setCoins] = useState<Coin[]>([]);
+  const [activePowerUps, setActivePowerUps] = useState<any[]>([]);
   const [particles, setParticles] = useState<any[]>([]);
 
-  const gameLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Game state
+  const [bestScore, setBestScore] = useState(0);
+  const [totalCoins, setTotalCoins] = useState(0);
+  const [lastObstacleSpawn, setLastObstacleSpawn] = useState(0);
+  const [gameTime, setGameTime] = useState(0);
+
   const backgroundY = useSharedValue(0);
+  const gameLoopRef = useRef<NodeJS.Timeout | null>(null);
   const [accelerometerData, setAccelerometerData] = useState({ x: 0, y: 0, z: 0 });
 
   // Load initial data
@@ -127,7 +132,7 @@ export const GameScreen: React.FC<Props> = ({
     }
   }, [accelerometerData, settings.controlMode, gameState.isPaused, gameState.isGameOver]);
 
-  // Game loop
+  // Main game loop
   useEffect(() => {
     if (gameState.isPlaying && !gameState.isPaused && !gameState.isGameOver) {
       gameLoopRef.current = setInterval(() => {
@@ -140,19 +145,42 @@ export const GameScreen: React.FC<Props> = ({
         }
       };
     }
-  }, [gameState.isPlaying, gameState.isPaused, gameState.isGameOver, updateGame]);
+  }, [gameState.isPlaying, gameState.isPaused, gameState.isGameOver]);
 
   const updateGame = useCallback(() => {
     const deltaTime = 16;
+    
+    setGameTime(prev => prev + deltaTime);
 
-    // Update player
-    setPlayer(prev => gameEngine.updatePlayer(prev, deltaTime));
+    // Update player physics
+    setPlayer(prev => {
+      const newPlayer = { ...prev };
+
+      // Apply gravity when jumping
+      if (newPlayer.isJumping) {
+        newPlayer.velocity.y += GAME_CONFIG.GRAVITY;
+        newPlayer.position.y += newPlayer.velocity.y;
+
+        // Land when reaching ground
+        if (newPlayer.position.y >= SCREEN_HEIGHT - 150) {
+          newPlayer.position.y = SCREEN_HEIGHT - 150;
+          newPlayer.isJumping = false;
+          newPlayer.velocity.y = 0;
+        }
+      }
+
+      // Smooth lane movement
+      const laneWidth = SCREEN_WIDTH / GAME_CONFIG.LANES;
+      const targetX = laneWidth * newPlayer.lane + laneWidth / 2;
+      const diff = targetX - newPlayer.position.x;
+      newPlayer.position.x += diff * 0.15;
+
+      return newPlayer;
+    });
 
     // Update game state
     setGameState(prev => {
       const newState = { ...prev };
-
-      // Increase score
       newState.score += 1;
       newState.streak += 1;
 
@@ -166,35 +194,167 @@ export const GameScreen: React.FC<Props> = ({
       return newState;
     });
 
-    // Spawn and update game objects
-    gameEngine.spawnObstacles(gameState);
-    gameEngine.spawnCollectibles(gameState);
-    gameEngine.updateObstacles(gameState, deltaTime);
-    gameEngine.updateCollectibles(gameState, deltaTime);
-    gameEngine.updateActivePowerUps(deltaTime);
+    // Spawn obstacles
+    setLastObstacleSpawn(prev => {
+      const timeSinceLastSpawn = gameTime - prev;
+      const spawnInterval = 1000 / (difficultyConfig.obstacles * (1 + gameState.level * 0.1));
+      
+      if (timeSinceLastSpawn > spawnInterval) {
+        const obstacleTypes: Obstacle['type'][] = ['spike', 'block'];
+        if (gameState.level >= 3) obstacleTypes.push('ball');
+        if (gameState.level >= 5) obstacleTypes.push('zigzag');
+
+        const type = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+        const lane = Math.floor(Math.random() * GAME_CONFIG.LANES);
+        const laneWidth = SCREEN_WIDTH / GAME_CONFIG.LANES;
+
+        const newObstacle: Obstacle = {
+          id: `obstacle_${Date.now()}_${Math.random()}`,
+          type,
+          position: {
+            x: laneWidth * lane + laneWidth / 2,
+            y: -50,
+          },
+          size: { width: 40, height: 40 },
+          speed: gameState.speed,
+          lane,
+        };
+
+        setObstacles(prev => [...prev, newObstacle]);
+        return gameTime;
+      }
+      return prev;
+    });
+
+    // Spawn power-ups
+    if (Math.random() < GAME_CONFIG.POWERUP_SPAWN_CHANCE * difficultyConfig.powerups) {
+      const types: PowerUp['type'][] = ['shield', 'slowmotion', 'doublepoints'];
+      const type = types[Math.floor(Math.random() * types.length)];
+      const lane = Math.floor(Math.random() * GAME_CONFIG.LANES);
+      const laneWidth = SCREEN_WIDTH / GAME_CONFIG.LANES;
+
+      const newPowerUp: PowerUp = {
+        id: `powerup_${Date.now()}_${Math.random()}`,
+        type,
+        position: {
+          x: laneWidth * lane + laneWidth / 2,
+          y: -30,
+        },
+        collected: false,
+      };
+
+      setPowerUps(prev => [...prev, newPowerUp]);
+    }
+
+    // Spawn coins
+    if (Math.random() < GAME_CONFIG.COIN_SPAWN_CHANCE) {
+      const lane = Math.floor(Math.random() * GAME_CONFIG.LANES);
+      const laneWidth = SCREEN_WIDTH / GAME_CONFIG.LANES;
+
+      const newCoin: Coin = {
+        id: `coin_${Date.now()}_${Math.random()}`,
+        position: {
+          x: laneWidth * lane + laneWidth / 2,
+          y: -20,
+        },
+        collected: false,
+      };
+
+      setCoins(prev => [...prev, newCoin]);
+    }
+
+    // Update obstacles
+    setObstacles(prev => prev.map(obstacle => ({
+      ...obstacle,
+      position: { ...obstacle.position, y: obstacle.position.y + gameState.speed }
+    })).filter(obstacle => obstacle.position.y < SCREEN_HEIGHT + 100));
+
+    // Update power-ups
+    setPowerUps(prev => prev.map(powerUp => ({
+      ...powerUp,
+      position: { ...powerUp.position, y: powerUp.position.y + gameState.speed }
+    })).filter(powerUp => powerUp.position.y < SCREEN_HEIGHT + 100 && !powerUp.collected));
+
+    // Update coins
+    setCoins(prev => prev.map(coin => ({
+      ...coin,
+      position: { ...coin.position, y: coin.position.y + gameState.speed }
+    })).filter(coin => coin.position.y < SCREEN_HEIGHT + 100 && !coin.collected));
+
+    // Update active power-ups
+    setActivePowerUps(prev => prev.map(powerUp => ({
+      ...powerUp,
+      timeLeft: powerUp.timeLeft - deltaTime
+    })).filter(powerUp => powerUp.timeLeft > 0));
 
     // Check collisions
-    const collisions = gameEngine.checkCollisions(player);
-
-    if (collisions.hitObstacle && !gameEngine.hasActivePowerUp('shield')) {
-      handleObstacleHit();
-    }
-
-    if (collisions.collectedPowerUps.length > 0) {
-      collisions.collectedPowerUps.forEach(powerUp => {
-        handlePowerUpCollection(powerUp.type);
-      });
-    }
-
-    if (collisions.collectedCoins.length > 0) {
-      handleCoinCollection(collisions.collectedCoins.length);
-    }
+    checkCollisions();
 
     // Update background scroll
     runOnJS(() => {
       backgroundY.value = (backgroundY.value + gameState.speed) % SCREEN_HEIGHT;
     })();
-  }, [player, gameState, gameEngine, difficultyConfig, backgroundY]);
+  }, [gameState, gameTime, difficultyConfig, backgroundY]);
+
+  const checkCollisions = useCallback(() => {
+    const playerBounds = {
+      x: player.position.x - 20,
+      y: player.position.y - 20,
+      width: 40,
+      height: 40,
+    };
+
+    // Check obstacle collisions
+    const hitObstacle = obstacles.some(obstacle => {
+      const obstacleBounds = {
+        x: obstacle.position.x - obstacle.size.width / 2,
+        y: obstacle.position.y - obstacle.size.height / 2,
+        width: obstacle.size.width,
+        height: obstacle.size.height,
+      };
+
+      return isColliding(playerBounds, obstacleBounds);
+    });
+
+    if (hitObstacle && !activePowerUps.some(p => p.type === 'shield')) {
+      handleObstacleHit();
+    }
+
+    // Check power-up collections
+    powerUps.forEach(powerUp => {
+      const powerUpBounds = {
+        x: powerUp.position.x - 15,
+        y: powerUp.position.y - 15,
+        width: 30,
+        height: 30,
+      };
+
+      if (isColliding(playerBounds, powerUpBounds) && !powerUp.collected) {
+        handlePowerUpCollection(powerUp);
+      }
+    });
+
+    // Check coin collections
+    coins.forEach(coin => {
+      const coinBounds = {
+        x: coin.position.x - 10,
+        y: coin.position.y - 10,
+        width: 20,
+        height: 20,
+      };
+
+      if (isColliding(playerBounds, coinBounds) && !coin.collected) {
+        handleCoinCollection(coin);
+      }
+    });
+  }, [player, obstacles, powerUps, coins, activePowerUps]);
+
+  const isColliding = (rect1: any, rect2: any): boolean => {
+    return rect1.x < rect2.x + rect2.width &&
+      rect1.x + rect1.width > rect2.x &&
+      rect1.y < rect2.y + rect2.height &&
+      rect1.y + rect1.height > rect2.y;
+  };
 
   const handleObstacleHit = useCallback(() => {
     if (settings.vibrationEnabled && Platform.OS !== 'web') {
@@ -210,34 +370,58 @@ export const GameScreen: React.FC<Props> = ({
     });
   }, [settings.vibrationEnabled]);
 
-  const handlePowerUpCollection = useCallback((type: 'shield' | 'slowmotion' | 'doublepoints') => {
+  const handlePowerUpCollection = useCallback((powerUp: PowerUp) => {
     if (settings.vibrationEnabled && Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
-    gameEngine.activatePowerUp(type);
+
+    // Mark as collected
+    setPowerUps(prev => prev.map(p => 
+      p.id === powerUp.id ? { ...p, collected: true } : p
+    ));
+
+    // Activate power-up
+    const durations = {
+      shield: 5000,
+      slowmotion: 3000,
+      doublepoints: 10000,
+    };
+
+    setActivePowerUps(prev => [
+      ...prev.filter(p => p.type !== powerUp.type),
+      {
+        type: powerUp.type,
+        timeLeft: durations[powerUp.type],
+        duration: durations[powerUp.type],
+      }
+    ]);
 
     // Add particle effect
     const newParticle = {
       id: Date.now(),
       x: player.position.x,
       y: player.position.y,
-      color: POWER_UP_CONFIGS[type].color,
+      color: '#F59E0B',
       type: 'powerup',
     };
     setParticles(prev => [...prev, newParticle]);
 
-    // Remove particle after animation
     setTimeout(() => {
       setParticles(prev => prev.filter(p => p.id !== newParticle.id));
     }, 1000);
-  }, [player.position, gameEngine, settings.vibrationEnabled]);
+  }, [player.position, settings.vibrationEnabled]);
 
-  const handleCoinCollection = useCallback((count: number) => {
+  const handleCoinCollection = useCallback((coin: Coin) => {
     if (settings.vibrationEnabled && Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
 
-    const points = gameEngine.hasActivePowerUp('doublepoints') ? count * 2 : count;
+    // Mark as collected
+    setCoins(prev => prev.map(c => 
+      c.id === coin.id ? { ...c, collected: true } : c
+    ));
+
+    const points = activePowerUps.some(p => p.type === 'doublepoints') ? 2 : 1;
 
     setGameState(prev => ({
       ...prev,
@@ -257,30 +441,37 @@ export const GameScreen: React.FC<Props> = ({
     setTimeout(() => {
       setParticles(prev => prev.filter(p => p.id !== newParticle.id));
     }, 800);
-  }, [player.position, gameEngine, settings.vibrationEnabled]);
+  }, [player.position, activePowerUps, settings.vibrationEnabled]);
 
   const handleMovement = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     if (gameState.isPaused || gameState.isGameOver) return;
 
     setPlayer(prev => {
+      const newPlayer = { ...prev };
+      
       switch (direction) {
         case 'up':
-          return gameEngine.jump(prev);
-        case 'left':
-          return gameEngine.changeLane(prev, 'left');
-        case 'right':
-          return gameEngine.changeLane(prev, 'right');
-        case 'down':
-          // Quick drop - increase fall speed if jumping
-          if (prev.isJumping) {
-            return { ...prev, velocity: { ...prev.velocity, y: prev.velocity.y + 5 } };
+          if (!newPlayer.isJumping) {
+            newPlayer.isJumping = true;
+            newPlayer.velocity.y = GAME_CONFIG.JUMP_FORCE;
           }
-          return prev;
-        default:
-          return prev;
+          break;
+        case 'left':
+          newPlayer.lane = Math.max(0, newPlayer.lane - 1);
+          break;
+        case 'right':
+          newPlayer.lane = Math.min(GAME_CONFIG.LANES - 1, newPlayer.lane + 1);
+          break;
+        case 'down':
+          if (newPlayer.isJumping) {
+            newPlayer.velocity.y += 5;
+          }
+          break;
       }
+      
+      return newPlayer;
     });
-  }, [gameState.isPaused, gameState.isGameOver, gameEngine]);
+  }, [gameState.isPaused, gameState.isGameOver]);
 
   const swipeGesture = Gesture.Pan()
     .onEnd((event) => {
@@ -310,21 +501,17 @@ export const GameScreen: React.FC<Props> = ({
   }, []);
 
   const restartGame = useCallback(async () => {
-    gameEngine.reset();
-
     // Save game data
     if (gameState.score > bestScore) {
       setBestScore(gameState.score);
       await StorageManager.setBestScore(gameState.score);
     }
 
-    setLastScore(gameState.score);
     const newTotalCoins = totalCoins + gameState.coins;
     setTotalCoins(newTotalCoins);
     await StorageManager.setTotalCoins(newTotalCoins);
 
     // Reset game state
-    gameEngine.reset();
     setGameState({
       isPlaying: true,
       isPaused: false,
@@ -342,16 +529,23 @@ export const GameScreen: React.FC<Props> = ({
       emoji: selectedSkin,
       position: {
         x: SCREEN_WIDTH / 2,
-        y: SCREEN_HEIGHT - GAME_CONFIG.GROUND_HEIGHT
+        y: SCREEN_HEIGHT - 150
       },
       lane: 1,
       isJumping: false,
       velocity: { x: 0, y: 0 },
     });
 
+    // Clear game objects
+    setObstacles([]);
+    setPowerUps([]);
+    setCoins([]);
+    setActivePowerUps([]);
     setParticles([]);
+    setGameTime(0);
+    setLastObstacleSpawn(0);
     backgroundY.value = 0;
-  }, [gameState, bestScore, totalCoins, gameEngine, difficultyConfig, selectedSkin, backgroundY]);
+  }, [gameState, bestScore, totalCoins, difficultyConfig, selectedSkin, backgroundY]);
 
   const backgroundStyle = useAnimatedStyle(() => {
     return {
@@ -392,24 +586,24 @@ export const GameScreen: React.FC<Props> = ({
             coins={gameState.coins}
             lives={gameState.lives}
             level={gameState.level}
-            activePowerUps={gameEngine.getActivePowerUps()}
+            activePowerUps={activePowerUps}
             onPause={pauseGame}
           />
 
           <PlayerEmoji
             player={player}
-            isShielded={gameEngine.hasActivePowerUp('shield')}
+            isShielded={activePowerUps.some(p => p.type === 'shield')}
           />
 
-          {gameEngine.getObstacles().map(obstacle => (
+          {obstacles.map(obstacle => (
             <ObstacleComponent key={obstacle.id} obstacle={obstacle} />
           ))}
 
-          {gameEngine.getPowerUps().map(powerUp => (
+          {powerUps.filter(p => !p.collected).map(powerUp => (
             <PowerUpComponent key={powerUp.id} powerUp={powerUp} />
           ))}
 
-          {gameEngine.getCoins().map(coin => (
+          {coins.filter(c => !c.collected).map(coin => (
             <CoinComponent key={coin.id} coin={coin} />
           ))}
 

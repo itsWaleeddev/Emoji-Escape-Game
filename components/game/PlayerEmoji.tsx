@@ -35,19 +35,16 @@ export const PlayerEmoji: React.FC<Props> = ({ player, isShielded }) => {
       opacity: isShielded ? withSpring(0.7) : withSpring(0),
       transform: [
         { scale: isShielded ? withSpring(1.5) : withSpring(0) },
+        { translateX: withSpring(player.position.x - 45) },
+        { translateY: withSpring(player.position.y - 45) },
       ],
     };
   });
 
-  const shieldPosition = {
-    left: (player?.position?.x || 0) - 45,
-    top: (player?.position?.y || 0) - 45,
-  };
-
   return (
     <>
       {/* Shield effect */}
-      <Animated.View style={[styles.shield, shieldStyle, shieldPosition]} />
+      <Animated.View style={[styles.shield, shieldStyle]} />
 
       {/* Player emoji */}
       <Animated.View style={[styles.player, animatedStyle]}>
