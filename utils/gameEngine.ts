@@ -59,13 +59,11 @@ export class GameEngine {
   }
 
   spawnObstacles(gameState: GameState): void {
-    //const multiplier = DIFFICULTY_MULTIPLIERS[this.difficulty];
-    const multiplier = DIFFICULTY_MULTIPLIERS[this.difficulty]
-      ?? DIFFICULTY_MULTIPLIERS.medium;
+    const multiplier = DIFFICULTY_MULTIPLIERS[this.difficulty] ?? DIFFICULTY_MULTIPLIERS.medium;
     const spawnChance = 0.02 * multiplier.obstacles;
 
     if (Math.random() < spawnChance &&
-      SCREEN_HEIGHT - this.lastObstacleY > GAME_CONFIG.OBSTACLE_SPAWN_DISTANCE) {
+      Math.abs(this.lastObstacleY) > GAME_CONFIG.OBSTACLE_SPAWN_DISTANCE) {
 
       const obstacleTypes: Obstacle['type'][] = ['spike', 'block'];
       if (gameState.level >= 3) obstacleTypes.push('ball');
@@ -85,28 +83,14 @@ export class GameEngine {
         speed: gameState.speed,
         lane,
       };
-      // this.obstacles.push({
-      //   id: `obstacle_${this.obstacleIdCounter++}`,
-      //   type,
-      //   position: {
-      //     x: (SCREEN_WIDTH / GAME_CONFIG.LANES) * lane + (SCREEN_WIDTH / GAME_CONFIG.LANES) / 2,
-      //     y: -50,
-      //   },
-      //   size: { width: 40, height: 40 },
-      //   speed: gameState.speed,
-      //   lane,
-      // });
       this.obstacles.push(newObstacle);
-      //this.lastObstacleY = -50;
       this.lastObstacleY = newObstacle.position.y;
-
     }
   }
 
   spawnCollectibles(gameState: GameState): void {
-    //const multiplier = DIFFICULTY_MULTIPLIERS[this.difficulty];
-    const multiplier = DIFFICULTY_MULTIPLIERS[this.difficulty]
-      ?? DIFFICULTY_MULTIPLIERS.medium;
+    const multiplier = DIFFICULTY_MULTIPLIERS[this.difficulty] ?? DIFFICULTY_MULTIPLIERS.medium;
+    
     // Spawn power-ups
     if (Math.random() < GAME_CONFIG.POWERUP_SPAWN_CHANCE * multiplier.powerups) {
       const types: PowerUp['type'][] = ['shield', 'slowmotion', 'doublepoints'];

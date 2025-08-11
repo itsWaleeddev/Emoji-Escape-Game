@@ -39,13 +39,15 @@ export const PlayerEmoji: React.FC<Props> = ({ player, isShielded }) => {
     };
   });
 
+  const shieldPosition = {
+    left: (player?.position?.x || 0) - 45,
+    top: (player?.position?.y || 0) - 45,
+  };
+
   return (
     <>
       {/* Shield effect */}
-      <Animated.View style={[styles.shield, shieldStyle, {
-        left: player?.position?.x - 45 || 0,
-        top: player?.position?.y - 45 || 0,
-      }]} />
+      <Animated.View style={[styles.shield, shieldStyle, shieldPosition]} />
 
       {/* Player emoji */}
       <Animated.View style={[styles.player, animatedStyle]}>
@@ -70,8 +72,6 @@ const styles = StyleSheet.create({
   },
   shield: {
     position: 'absolute',
-    //left: player?.position?.x - 45 || 0,
-    //top: player?.position?.y - 45 || 0,
     width: 90,
     height: 90,
     borderRadius: 45,

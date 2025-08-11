@@ -1,14 +1,16 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { View, StyleSheet, Dimensions, Text, Pressable } from 'react-native';
+import { View, StyleSheet, Dimensions, Text, Pressable, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
   interpolate,
+  runOnJS,
 } from 'react-native-reanimated';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
+import { Accelerometer } from 'expo-sensors';
 import { Player, GameState, ActivePowerUp } from '@/types/game';
 import { GameEngine } from '@/utils/gameEngine';
 import { StorageManager } from '@/utils/storage';
@@ -39,6 +41,13 @@ export const GameScreen: React.FC<Props> = ({
 }) => {
   const gameEngine = useRef(new GameEngine(difficulty)).current;
   const difficultyConfig = DIFFICULTY_MULTIPLIERS[difficulty] ?? DIFFICULTY_MULTIPLIERS.easy;
+  const [settings, setSettings] = useState({
+    soundEnabled: true,
+    vibrationEnabled: true,
+    controlMode: 'swipe' as 'swipe' | 'tilt',
+    difficulty: difficulty,
+  });
+  
   const [gameState, setGameState] = useState<GameState>({
     isPlaying: true,
     isPaused: false,
@@ -47,7 +56,6 @@ export const GameScreen: React.FC<Props> = ({
     coins: 0,
     lives: GAME_CONFIG.MAX_LIVES,
     level: 1,
-    //speed: GAME_CONFIG.BASE_SPEED * DIFFICULTY_MULTIPLIERS[difficulty].speed,
     speed: GAME_CONFIG.BASE_SPEED * difficultyConfig.speed,
     streak: 0,
   });
@@ -69,22 +77,55 @@ export const GameScreen: React.FC<Props> = ({
   const [totalCoins, setTotalCoins] = useState(0);
   const [particles, setParticles] = useState<any[]>([]);
 
-  //const gameLoopRef = useRef<NodeJS.Timeout | null>(null);
   const gameLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const backgroundY = useSharedValue(0);
+  const [accelerometerData, setAccelerometerData] = useState({ x: 0, y: 0, z: 0 });
 
   // Load initial data
   useEffect(() => {
     const loadInitialData = async () => {
-      const [best, coins] = await Promise.all([
+      const [best, coins, gameSettings] = await Promise.all([
         StorageManager.getBestScore(),
         StorageManager.getTotalCoins(),
+        StorageManager.getSettings(),
       ]);
       setBestScore(best);
       setTotalCoins(coins);
+      setSettings(gameSettings);
     };
     loadInitialData();
   }, []);
+
+  // Setup accelerometer for tilt controls
+  useEffect(() => {
+    let subscription: any;
+    
+    if (settings.controlMode === 'tilt') {
+      Accelerometer.setUpdateInterval(100);
+      subscription = Accelerometer.addListener(accelerometerData => {
+        setAccelerometerData(accelerometerData);
+      });
+    }
+
+    return () => {
+      if (subscription) {
+        subscription.remove();
+      }
+    };
+  }, [settings.controlMode]);
+
+  // Handle tilt controls
+  useEffect(() => {
+    if (settings.controlMode === 'tilt' && !gameState.isPaused && !gameState.isGameOver) {
+      const tiltThreshold = 0.3;
+      
+      if (accelerometerData.x > tiltThreshold) {
+        handleMovement('right');
+      } else if (accelerometerData.x < -tiltThreshold) {
+        handleMovement('left');
+      }
+    }
+  }, [accelerometerData, settings.controlMode, gameState.isPaused, gameState.isGameOver]);
 
   // Game loop
   useEffect(() => {
@@ -99,7 +140,7 @@ export const GameScreen: React.FC<Props> = ({
         }
       };
     }
-  }, [gameState.isPlaying, gameState.isPaused, gameState.isGameOver]);
+  }, [gameState.isPlaying, gameState.isPaused, gameState.isGameOver, updateGame]);
 
   const updateGame = useCallback(() => {
     const deltaTime = 16;
@@ -119,9 +160,7 @@ export const GameScreen: React.FC<Props> = ({
       const newLevel = Math.floor(newState.score / GAME_CONFIG.POINTS_PER_LEVEL) + 1;
       if (newLevel > newState.level) {
         newState.level = newLevel;
-        newState.speed = (GAME_CONFIG.BASE_SPEED +
-          (newLevel - 1) * GAME_CONFIG.SPEED_INCREASE_PER_LEVEL) *
-          DIFFICULTY_MULTIPLIERS[difficulty].speed;
+        newState.speed = (GAME_CONFIG.BASE_SPEED + (newLevel - 1) * GAME_CONFIG.SPEED_INCREASE_PER_LEVEL) * difficultyConfig.speed;
       }
 
       return newState;
@@ -152,11 +191,15 @@ export const GameScreen: React.FC<Props> = ({
     }
 
     // Update background scroll
-    backgroundY.value = (backgroundY.value + gameState.speed) % SCREEN_HEIGHT;
-  }, [player, gameState, gameEngine, difficulty]);
+    runOnJS(() => {
+      backgroundY.value = (backgroundY.value + gameState.speed) % SCREEN_HEIGHT;
+    })();
+  }, [player, gameState, gameEngine, difficultyConfig, backgroundY]);
 
   const handleObstacleHit = useCallback(() => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    if (settings.vibrationEnabled && Platform.OS !== 'web') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
 
     setGameState(prev => {
       const newLives = prev.lives - 1;
@@ -165,10 +208,12 @@ export const GameScreen: React.FC<Props> = ({
       }
       return { ...prev, lives: newLives, streak: 0 };
     });
-  }, []);
+  }, [settings.vibrationEnabled]);
 
   const handlePowerUpCollection = useCallback((type: 'shield' | 'slowmotion' | 'doublepoints') => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (settings.vibrationEnabled && Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
     gameEngine.activatePowerUp(type);
 
     // Add particle effect
@@ -185,10 +230,12 @@ export const GameScreen: React.FC<Props> = ({
     setTimeout(() => {
       setParticles(prev => prev.filter(p => p.id !== newParticle.id));
     }, 1000);
-  }, [player.position, gameEngine]);
+  }, [player.position, gameEngine, settings.vibrationEnabled]);
 
   const handleCoinCollection = useCallback((count: number) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (settings.vibrationEnabled && Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
 
     const points = gameEngine.hasActivePowerUp('doublepoints') ? count * 2 : count;
 
@@ -210,9 +257,9 @@ export const GameScreen: React.FC<Props> = ({
     setTimeout(() => {
       setParticles(prev => prev.filter(p => p.id !== newParticle.id));
     }, 800);
-  }, [player.position, gameEngine]);
+  }, [player.position, gameEngine, settings.vibrationEnabled]);
 
-  const handleSwipe = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
+  const handleMovement = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     if (gameState.isPaused || gameState.isGameOver) return;
 
     setPlayer(prev => {
@@ -223,6 +270,12 @@ export const GameScreen: React.FC<Props> = ({
           return gameEngine.changeLane(prev, 'left');
         case 'right':
           return gameEngine.changeLane(prev, 'right');
+        case 'down':
+          // Quick drop - increase fall speed if jumping
+          if (prev.isJumping) {
+            return { ...prev, velocity: { ...prev.velocity, y: prev.velocity.y + 5 } };
+          }
+          return prev;
         default:
           return prev;
       }
@@ -231,15 +284,19 @@ export const GameScreen: React.FC<Props> = ({
 
   const swipeGesture = Gesture.Pan()
     .onEnd((event) => {
+      if (settings.controlMode !== 'swipe') return;
+      
       const { translationX, translationY, velocityX, velocityY } = event;
+      const minSwipeDistance = 30;
+      const minSwipeVelocity = 300;
 
-      if (Math.abs(translationX) > Math.abs(translationY)) {
-        if (Math.abs(velocityX) > 500) {
-          handleSwipe(translationX > 0 ? 'right' : 'left');
+      if (Math.abs(translationX) > Math.abs(translationY) && Math.abs(translationX) > minSwipeDistance) {
+        if (Math.abs(velocityX) > minSwipeVelocity) {
+          handleMovement(translationX > 0 ? 'right' : 'left');
         }
-      } else {
-        if (Math.abs(velocityY) > 500) {
-          handleSwipe(translationY < 0 ? 'up' : 'down');
+      } else if (Math.abs(translationY) > minSwipeDistance) {
+        if (Math.abs(velocityY) > minSwipeVelocity) {
+          handleMovement(translationY < 0 ? 'up' : 'down');
         }
       }
     });
@@ -267,6 +324,7 @@ export const GameScreen: React.FC<Props> = ({
     await StorageManager.setTotalCoins(newTotalCoins);
 
     // Reset game state
+    gameEngine.reset();
     setGameState({
       isPlaying: true,
       isPaused: false,
@@ -275,7 +333,7 @@ export const GameScreen: React.FC<Props> = ({
       coins: 0,
       lives: GAME_CONFIG.MAX_LIVES,
       level: 1,
-      speed: GAME_CONFIG.BASE_SPEED * DIFFICULTY_MULTIPLIERS[difficulty].speed,
+      speed: GAME_CONFIG.BASE_SPEED * difficultyConfig.speed,
       streak: 0,
     });
 
@@ -293,7 +351,7 @@ export const GameScreen: React.FC<Props> = ({
 
     setParticles([]);
     backgroundY.value = 0;
-  }, [gameState, bestScore, totalCoins, gameEngine, difficulty, selectedSkin]);
+  }, [gameState, bestScore, totalCoins, gameEngine, difficultyConfig, selectedSkin, backgroundY]);
 
   const backgroundStyle = useAnimatedStyle(() => {
     return {
