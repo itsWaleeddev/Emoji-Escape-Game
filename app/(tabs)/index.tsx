@@ -12,7 +12,7 @@ export default function GameTab() {
   const [settings, setSettings] = useState<GameSettings>({
     soundEnabled: true,
     vibrationEnabled: true,
-    controlMode: 'swipe',
+    controlMode: 'touch',
     difficulty: 'medium',
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -28,7 +28,7 @@ export default function GameTab() {
       setSettings(gameSettings ?? {
         soundEnabled: true,
         vibrationEnabled: true,
-        controlMode: 'swipe',
+        controlMode: 'touch',
         difficulty: 'medium',
       });
       setIsLoading(false);

@@ -13,7 +13,7 @@ export const SettingsScreen: React.FC<Props> = ({ onBack }) => {
   const [settings, setSettings] = useState<GameSettings>({
     soundEnabled: true,
     vibrationEnabled: true,
-    controlMode: 'swipe',
+    controlMode: 'touch',
     difficulty: 'medium',
   });
 
@@ -30,6 +30,11 @@ export const SettingsScreen: React.FC<Props> = ({ onBack }) => {
     const newSettings = { ...settings, [key]: value };
     setSettings(newSettings);
     await StorageManager.setSettings(newSettings);
+  };
+
+  const resetProgress = async () => {
+    await StorageManager.resetProgress();
+    // Show confirmation or feedback to user
   };
 
   const DifficultySelector = () => (
@@ -66,17 +71,17 @@ export const SettingsScreen: React.FC<Props> = ({ onBack }) => {
         <Pressable
           style={[
             styles.controlButton,
-            settings.controlMode === 'swipe' && styles.selectedControl
+            settings.controlMode === 'touch' && styles.selectedControl
           ]}
-          onPress={() => updateSetting('controlMode', 'swipe')}
+          onPress={() => updateSetting('controlMode', 'touch')}
         >
           <Text 
             style={[
               styles.controlText,
-              settings.controlMode === 'swipe' && styles.selectedControlText
+              settings.controlMode === 'touch' && styles.selectedControlText
             ]}
           >
-            Swipe
+            Touch
           </Text>
         </Pressable>
         <Pressable
@@ -152,12 +157,21 @@ export const SettingsScreen: React.FC<Props> = ({ onBack }) => {
         <ControlModeSelector />
         <DifficultySelector />
 
+        <View style={styles.settingSection}>
+          <Pressable style={styles.resetButton} onPress={resetProgress}>
+            <Text style={styles.resetButtonText}>Reset Game Progress</Text>
+          </Pressable>
+          <Text style={styles.resetDescription}>
+            This will reset your current level back to 1 and clear your best score.
+          </Text>
+        </View>
+
         <View style={styles.infoSection}>
           <Text style={styles.infoTitle}>Game Tips</Text>
           <Text style={styles.infoText}>
-            • Swipe up to jump over obstacles{'\n'}
-            • Swipe left/right to change lanes{'\n'}
-            • Swipe down for quick drop{'\n'}
+            • Tap JUMP button to jump over obstacles{'\n'}
+            • Tap left/right arrows to change lanes{'\n'}
+            • Use tilt controls for motion-based gameplay{'\n'}
             • Collect power-ups for special abilities{'\n'}
             • Higher difficulties offer better rewards
           </Text>
@@ -266,6 +280,25 @@ const styles = StyleSheet.create({
   },
   selectedControlText: {
     color: '#FFFFFF',
+  },
+  resetButton: {
+    backgroundColor: '#EF4444',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  resetButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  resetDescription: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 16,
   },
   infoSection: {
     marginTop: 20,

@@ -9,6 +9,7 @@ import Animated, {
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { Accelerometer } from 'expo-sensors';
+import { TouchControls } from './TouchControls';
 import { Player, GameState, Obstacle, PowerUp, Coin } from '@/types/game';
 import { StorageManager } from '@/utils/storage';
 import { GAME_CONFIG, DIFFICULTY_MULTIPLIERS, LEVEL_BACKGROUNDS, PLAYER_SKINS } from '@/constants/game';
@@ -41,7 +42,7 @@ export const GameScreen: React.FC<Props> = ({
   const [settings, setSettings] = useState({
     soundEnabled: true,
     vibrationEnabled: true,
-    controlMode: 'swipe' as 'swipe' | 'tilt',
+    controlMode: 'touch' as 'touch' | 'tilt',
     difficulty: difficulty,
   });
   
@@ -89,14 +90,22 @@ export const GameScreen: React.FC<Props> = ({
   // Load initial data
   useEffect(() => {
     const loadInitialData = async () => {
-      const [best, coins, gameSettings] = await Promise.all([
+      const [best, coins, gameSettings, savedLevel] = await Promise.all([
         StorageManager.getBestScore(),
         StorageManager.getTotalCoins(),
         StorageManager.getSettings(),
+        StorageManager.getCurrentLevel(),
       ]);
       setBestScore(best);
       setTotalCoins(coins);
       setSettings(gameSettings);
+      
+      // Start from saved level
+      setGameState(prev => ({
+        ...prev,
+        level: savedLevel,
+        speed: (GAME_CONFIG.BASE_SPEED + (savedLevel - 1) * GAME_CONFIG.SPEED_INCREASE_PER_LEVEL) * difficultyConfig.speed,
+      }));
     };
     loadInitialData();
   }, []);
@@ -186,9 +195,13 @@ export const GameScreen: React.FC<Props> = ({
 
       // Level progression
       const newLevel = Math.floor(newState.score / GAME_CONFIG.POINTS_PER_LEVEL) + 1;
-      if (newLevel > newState.level) {
-        newState.level = newLevel;
-        newState.speed = (GAME_CONFIG.BASE_SPEED + (newLevel - 1) * GAME_CONFIG.SPEED_INCREASE_PER_LEVEL) * difficultyConfig.speed;
+      const actualNewLevel = Math.max(newLevel, gameState.level); // Don't go below saved level
+      if (actualNewLevel > newState.level) {
+        newState.level = actualNewLevel;
+        newState.speed = (GAME_CONFIG.BASE_SPEED + (actualNewLevel - 1) * GAME_CONFIG.SPEED_INCREASE_PER_LEVEL) * difficultyConfig.speed;
+        
+        // Save current level
+        StorageManager.setCurrentLevel(actualNewLevel);
       }
 
       return newState;
@@ -305,7 +318,9 @@ export const GameScreen: React.FC<Props> = ({
     };
 
     // Check obstacle collisions
-    const hitObstacle = obstacles.some(obstacle => {
+    let hitObstacle = false;
+    
+    for (const obstacle of obstacles) {
       const obstacleBounds = {
         x: obstacle.position.x - obstacle.size.width / 2,
         y: obstacle.position.y - obstacle.size.height / 2,
@@ -313,8 +328,11 @@ export const GameScreen: React.FC<Props> = ({
         height: obstacle.size.height,
       };
 
-      return isColliding(playerBounds, obstacleBounds);
-    });
+      if (isColliding(playerBounds, obstacleBounds)) {
+        hitObstacle = true;
+        break;
+      }
+    }
 
     if (hitObstacle && !activePowerUps.some(p => p.type === 'shield')) {
       handleObstacleHit();
@@ -350,6 +368,8 @@ export const GameScreen: React.FC<Props> = ({
   }, [player, obstacles, powerUps, coins, activePowerUps]);
 
   const isColliding = (rect1: any, rect2: any): boolean => {
+    // Add small tolerance to make collision detection more forgiving
+    const tolerance = 5;
     return rect1.x < rect2.x + rect2.width &&
       rect1.x + rect1.width > rect2.x &&
       rect1.y < rect2.y + rect2.height &&
@@ -446,6 +466,10 @@ export const GameScreen: React.FC<Props> = ({
   const handleMovement = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     if (gameState.isPaused || gameState.isGameOver) return;
 
+    if (settings.vibrationEnabled && Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+
     setPlayer(prev => {
       const newPlayer = { ...prev };
       
@@ -471,26 +495,19 @@ export const GameScreen: React.FC<Props> = ({
       
       return newPlayer;
     });
-  }, [gameState.isPaused, gameState.isGameOver]);
+  }, [gameState.isPaused, gameState.isGameOver, settings.vibrationEnabled]);
 
-  const swipeGesture = Gesture.Pan()
-    .onEnd((event) => {
-      if (settings.controlMode !== 'swipe') return;
-      
-      const { translationX, translationY, velocityX, velocityY } = event;
-      const minSwipeDistance = 30;
-      const minSwipeVelocity = 300;
+  const handleJump = useCallback(() => {
+    handleMovement('up');
+  }, [handleMovement]);
 
-      if (Math.abs(translationX) > Math.abs(translationY) && Math.abs(translationX) > minSwipeDistance) {
-        if (Math.abs(velocityX) > minSwipeVelocity) {
-          handleMovement(translationX > 0 ? 'right' : 'left');
-        }
-      } else if (Math.abs(translationY) > minSwipeDistance) {
-        if (Math.abs(velocityY) > minSwipeVelocity) {
-          handleMovement(translationY < 0 ? 'up' : 'down');
-        }
-      }
-    });
+  const handleMoveLeft = useCallback(() => {
+    handleMovement('left');
+  }, [handleMovement]);
+
+  const handleMoveRight = useCallback(() => {
+    handleMovement('right');
+  }, [handleMovement]);
 
   const pauseGame = useCallback(() => {
     setGameState(prev => ({ ...prev, isPaused: true }));
@@ -511,6 +528,9 @@ export const GameScreen: React.FC<Props> = ({
     setTotalCoins(newTotalCoins);
     await StorageManager.setTotalCoins(newTotalCoins);
 
+    // Get current saved level to restart from
+    const savedLevel = await StorageManager.getCurrentLevel();
+
     // Reset game state
     setGameState({
       isPlaying: true,
@@ -519,8 +539,8 @@ export const GameScreen: React.FC<Props> = ({
       score: 0,
       coins: 0,
       lives: GAME_CONFIG.MAX_LIVES,
-      level: 1,
-      speed: GAME_CONFIG.BASE_SPEED * difficultyConfig.speed,
+      level: savedLevel,
+      speed: (GAME_CONFIG.BASE_SPEED + (savedLevel - 1) * GAME_CONFIG.SPEED_INCREASE_PER_LEVEL) * difficultyConfig.speed,
       streak: 0,
     });
 
@@ -571,9 +591,8 @@ export const GameScreen: React.FC<Props> = ({
   }
 
   return (
-    <GestureHandlerRootView style={styles.container}>
-      <GestureDetector gesture={swipeGesture}>
-        <View style={styles.gameArea}>
+    <View style={styles.container}>
+      <View style={styles.gameArea}>
           <LinearGradient
             colors={[currentBackground.from, currentBackground.to]}
             style={StyleSheet.absoluteFillObject}
@@ -609,6 +628,13 @@ export const GameScreen: React.FC<Props> = ({
 
           <ParticleSystem particles={particles} />
 
+          <TouchControls
+            onJump={handleJump}
+            onMoveLeft={handleMoveLeft}
+            onMoveRight={handleMoveRight}
+            disabled={gameState.isPaused || gameState.isGameOver}
+          />
+
           {gameState.isPaused && (
             <PauseMenu
               onResume={resumeGame}
@@ -616,9 +642,8 @@ export const GameScreen: React.FC<Props> = ({
               onHome={onNavigateToMenu}
             />
           )}
-        </View>
-      </GestureDetector>
-    </GestureHandlerRootView>
+      </View>
+    </View>
   );
 };
 

@@ -11,6 +11,7 @@ export class StorageManager {
     SETTINGS: 'settings',
     DAILY_CHALLENGES: 'dailyChallenges',
     UNLOCKED_DIFFICULTIES: 'unlockedDifficulties',
+    CURRENT_LEVEL: 'currentLevel',
   };
 
   static async getBestScore(): Promise<number> {
@@ -87,14 +88,14 @@ export class StorageManager {
       return settings ? JSON.parse(settings) : {
         soundEnabled: true,
         vibrationEnabled: true,
-        controlMode: 'swipe',
+        controlMode: 'touch',
         difficulty: 'medium',
       };
     } catch {
       return {
         soundEnabled: true,
         vibrationEnabled: true,
-        controlMode: 'swipe',
+        controlMode: 'touch',
         difficulty: 'medium',
       };
     }
@@ -122,6 +123,34 @@ export class StorageManager {
       await AsyncStorage.setItem(this.KEYS.DAILY_CHALLENGES, JSON.stringify(challenges));
     } catch (error) {
       console.error('Error saving daily challenges:', error);
+    }
+  }
+
+  static async getCurrentLevel(): Promise<number> {
+    try {
+      const level = await AsyncStorage.getItem(this.KEYS.CURRENT_LEVEL);
+      return level ? parseInt(level, 10) : 1;
+    } catch {
+      return 1;
+    }
+  }
+
+  static async setCurrentLevel(level: number): Promise<void> {
+    try {
+      await AsyncStorage.setItem(this.KEYS.CURRENT_LEVEL, level.toString());
+    } catch (error) {
+      console.error('Error saving current level:', error);
+    }
+  }
+
+  static async resetProgress(): Promise<void> {
+    try {
+      await Promise.all([
+        AsyncStorage.setItem(this.KEYS.CURRENT_LEVEL, '1'),
+        AsyncStorage.setItem(this.KEYS.BEST_SCORE, '0'),
+      ]);
+    } catch (error) {
+      console.error('Error resetting progress:', error);
     }
   }
 }

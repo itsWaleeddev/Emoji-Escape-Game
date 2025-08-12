@@ -63,7 +63,7 @@ export interface Challenge {
 export interface GameSettings {
   soundEnabled: boolean;
   vibrationEnabled: boolean;
-  controlMode: 'swipe' | 'tilt';
+  controlMode: 'touch' | 'tilt';
   difficulty: 'easy' | 'medium' | 'hard' | 'extreme';
 }
 
