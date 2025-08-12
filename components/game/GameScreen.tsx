@@ -4,15 +4,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  runOnJS,
 } from 'react-native-reanimated';
-import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
-import { Accelerometer } from 'expo-sensors';
 import { TouchControls } from './TouchControls';
-import { Player, GameState, Obstacle, PowerUp, Coin } from '@/types/game';
+import { Player, GameState, Obstacle, PowerUp, Coin, ActivePowerUp } from '@/types/game';
 import { StorageManager } from '@/utils/storage';
-import { GAME_CONFIG, DIFFICULTY_MULTIPLIERS, LEVEL_BACKGROUNDS, PLAYER_SKINS } from '@/constants/game';
+import { GAME_CONFIG, DIFFICULTY_MULTIPLIERS, LEVEL_BACKGROUNDS } from '@/constants/game';
 import { PlayerEmoji } from './PlayerEmoji';
 import { ObstacleComponent } from './ObstacleComponent';
 import { PowerUpComponent } from './PowerUpComponent';
@@ -65,7 +62,7 @@ export const GameScreen: React.FC<Props> = ({
       x: SCREEN_WIDTH / 2,
       y: SCREEN_HEIGHT - 150
     },
-    lane: 1,
+    lane: 1, // Start in middle lane
     isJumping: false,
     velocity: { x: 0, y: 0 },
   });
@@ -74,18 +71,16 @@ export const GameScreen: React.FC<Props> = ({
   const [obstacles, setObstacles] = useState<Obstacle[]>([]);
   const [powerUps, setPowerUps] = useState<PowerUp[]>([]);
   const [coins, setCoins] = useState<Coin[]>([]);
-  const [activePowerUps, setActivePowerUps] = useState<any[]>([]);
+  const [activePowerUps, setActivePowerUps] = useState<ActivePowerUp[]>([]);
   const [particles, setParticles] = useState<any[]>([]);
 
   // Game state
   const [bestScore, setBestScore] = useState(0);
   const [totalCoins, setTotalCoins] = useState(0);
-  const [lastObstacleSpawn, setLastObstacleSpawn] = useState(0);
   const [gameTime, setGameTime] = useState(0);
 
   const backgroundY = useSharedValue(0);
   const gameLoopRef = useRef<NodeJS.Timeout | null>(null);
-  const [accelerometerData, setAccelerometerData] = useState({ x: 0, y: 0, z: 0 });
 
   // Load initial data
   useEffect(() => {
@@ -108,38 +103,7 @@ export const GameScreen: React.FC<Props> = ({
       }));
     };
     loadInitialData();
-  }, []);
-
-  // Setup accelerometer for tilt controls
-  useEffect(() => {
-    let subscription: any;
-    
-    if (settings.controlMode === 'tilt') {
-      Accelerometer.setUpdateInterval(100);
-      subscription = Accelerometer.addListener(accelerometerData => {
-        setAccelerometerData(accelerometerData);
-      });
-    }
-
-    return () => {
-      if (subscription) {
-        subscription.remove();
-      }
-    };
-  }, [settings.controlMode]);
-
-  // Handle tilt controls
-  useEffect(() => {
-    if (settings.controlMode === 'tilt' && !gameState.isPaused && !gameState.isGameOver) {
-      const tiltThreshold = 0.3;
-      
-      if (accelerometerData.x > tiltThreshold) {
-        handleMovement('right');
-      } else if (accelerometerData.x < -tiltThreshold) {
-        handleMovement('left');
-      }
-    }
-  }, [accelerometerData, settings.controlMode, gameState.isPaused, gameState.isGameOver]);
+  }, [difficultyConfig.speed]);
 
   // Main game loop
   useEffect(() => {
@@ -178,11 +142,17 @@ export const GameScreen: React.FC<Props> = ({
         }
       }
 
-      // Smooth lane movement
+      // Smooth lane movement - move to exact lane position
       const laneWidth = SCREEN_WIDTH / GAME_CONFIG.LANES;
       const targetX = laneWidth * newPlayer.lane + laneWidth / 2;
       const diff = targetX - newPlayer.position.x;
-      newPlayer.position.x += diff * 0.15;
+      
+      // Faster lane switching for better responsiveness
+      if (Math.abs(diff) > 2) {
+        newPlayer.position.x += diff * 0.25;
+      } else {
+        newPlayer.position.x = targetX; // Snap to exact position
+      }
 
       return newPlayer;
     });
@@ -195,7 +165,7 @@ export const GameScreen: React.FC<Props> = ({
 
       // Level progression
       const newLevel = Math.floor(newState.score / GAME_CONFIG.POINTS_PER_LEVEL) + 1;
-      const actualNewLevel = Math.max(newLevel, gameState.level); // Don't go below saved level
+      const actualNewLevel = Math.max(newLevel, prev.level);
       if (actualNewLevel > newState.level) {
         newState.level = actualNewLevel;
         newState.speed = (GAME_CONFIG.BASE_SPEED + (actualNewLevel - 1) * GAME_CONFIG.SPEED_INCREASE_PER_LEVEL) * difficultyConfig.speed;
@@ -208,36 +178,29 @@ export const GameScreen: React.FC<Props> = ({
     });
 
     // Spawn obstacles
-    setLastObstacleSpawn(prev => {
-      const timeSinceLastSpawn = gameTime - prev;
-      const spawnInterval = 1000 / (difficultyConfig.obstacles * (1 + gameState.level * 0.1));
-      
-      if (timeSinceLastSpawn > spawnInterval) {
-        const obstacleTypes: Obstacle['type'][] = ['spike', 'block'];
-        if (gameState.level >= 3) obstacleTypes.push('ball');
-        if (gameState.level >= 5) obstacleTypes.push('zigzag');
+    if (Math.random() < 0.015 * difficultyConfig.obstacles) {
+      const obstacleTypes: Obstacle['type'][] = ['spike', 'block'];
+      if (gameState.level >= 3) obstacleTypes.push('ball');
+      if (gameState.level >= 5) obstacleTypes.push('zigzag');
 
-        const type = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
-        const lane = Math.floor(Math.random() * GAME_CONFIG.LANES);
-        const laneWidth = SCREEN_WIDTH / GAME_CONFIG.LANES;
+      const type = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+      const lane = Math.floor(Math.random() * GAME_CONFIG.LANES);
+      const laneWidth = SCREEN_WIDTH / GAME_CONFIG.LANES;
 
-        const newObstacle: Obstacle = {
-          id: `obstacle_${Date.now()}_${Math.random()}`,
-          type,
-          position: {
-            x: laneWidth * lane + laneWidth / 2,
-            y: -50,
-          },
-          size: { width: 40, height: 40 },
-          speed: gameState.speed,
-          lane,
-        };
+      const newObstacle: Obstacle = {
+        id: `obstacle_${Date.now()}_${Math.random()}`,
+        type,
+        position: {
+          x: laneWidth * lane + laneWidth / 2,
+          y: -50,
+        },
+        size: { width: 40, height: 40 },
+        speed: gameState.speed,
+        lane,
+      };
 
-        setObstacles(prev => [...prev, newObstacle]);
-        return gameTime;
-      }
-      return prev;
-    });
+      setObstacles(prev => [...prev, newObstacle]);
+    }
 
     // Spawn power-ups
     if (Math.random() < GAME_CONFIG.POWERUP_SPAWN_CHANCE * difficultyConfig.powerups) {
@@ -304,72 +267,70 @@ export const GameScreen: React.FC<Props> = ({
     checkCollisions();
 
     // Update background scroll
-    runOnJS(() => {
-      backgroundY.value = (backgroundY.value + gameState.speed) % SCREEN_HEIGHT;
-    })();
+    backgroundY.value = (backgroundY.value + gameState.speed) % SCREEN_HEIGHT;
   }, [gameState, gameTime, difficultyConfig, backgroundY]);
 
   const checkCollisions = useCallback(() => {
     const playerBounds = {
-      x: player.position.x - 20,
-      y: player.position.y - 20,
-      width: 40,
-      height: 40,
+      x: player.position.x - 25,
+      y: player.position.y - 25,
+      width: 50,
+      height: 50,
     };
 
-    // Check obstacle collisions
-    let hitObstacle = false;
+    // Check obstacle collisions - only if not shielded
+    const hasShield = activePowerUps.some(p => p.type === 'shield');
     
-    for (const obstacle of obstacles) {
-      const obstacleBounds = {
-        x: obstacle.position.x - obstacle.size.width / 2,
-        y: obstacle.position.y - obstacle.size.height / 2,
-        width: obstacle.size.width,
-        height: obstacle.size.height,
-      };
+    if (!hasShield) {
+      for (const obstacle of obstacles) {
+        const obstacleBounds = {
+          x: obstacle.position.x - obstacle.size.width / 2,
+          y: obstacle.position.y - obstacle.size.height / 2,
+          width: obstacle.size.width,
+          height: obstacle.size.height,
+        };
 
-      if (isColliding(playerBounds, obstacleBounds)) {
-        hitObstacle = true;
-        break;
+        if (isColliding(playerBounds, obstacleBounds)) {
+          handleObstacleHit();
+          return; // Exit early to avoid multiple hits
+        }
       }
-    }
-
-    if (hitObstacle && !activePowerUps.some(p => p.type === 'shield')) {
-      handleObstacleHit();
     }
 
     // Check power-up collections
     powerUps.forEach(powerUp => {
-      const powerUpBounds = {
-        x: powerUp.position.x - 15,
-        y: powerUp.position.y - 15,
-        width: 30,
-        height: 30,
-      };
+      if (!powerUp.collected) {
+        const powerUpBounds = {
+          x: powerUp.position.x - 20,
+          y: powerUp.position.y - 20,
+          width: 40,
+          height: 40,
+        };
 
-      if (isColliding(playerBounds, powerUpBounds) && !powerUp.collected) {
-        handlePowerUpCollection(powerUp);
+        if (isColliding(playerBounds, powerUpBounds)) {
+          handlePowerUpCollection(powerUp);
+        }
       }
     });
 
     // Check coin collections
     coins.forEach(coin => {
-      const coinBounds = {
-        x: coin.position.x - 10,
-        y: coin.position.y - 10,
-        width: 20,
-        height: 20,
-      };
+      if (!coin.collected) {
+        const coinBounds = {
+          x: coin.position.x - 15,
+          y: coin.position.y - 15,
+          width: 30,
+          height: 30,
+        };
 
-      if (isColliding(playerBounds, coinBounds) && !coin.collected) {
-        handleCoinCollection(coin);
+        if (isColliding(playerBounds, coinBounds)) {
+          handleCoinCollection(coin);
+        }
       }
     });
   }, [player, obstacles, powerUps, coins, activePowerUps]);
 
   const isColliding = (rect1: any, rect2: any): boolean => {
-    // Add small tolerance to make collision detection more forgiving
-    const tolerance = 5;
     return rect1.x < rect2.x + rect2.width &&
       rect1.x + rect1.width > rect2.x &&
       rect1.y < rect2.y + rect2.height &&
@@ -463,7 +424,7 @@ export const GameScreen: React.FC<Props> = ({
     }, 800);
   }, [player.position, activePowerUps, settings.vibrationEnabled]);
 
-  const handleMovement = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
+  const handleJump = useCallback(() => {
     if (gameState.isPaused || gameState.isGameOver) return;
 
     if (settings.vibrationEnabled && Platform.OS !== 'web') {
@@ -471,43 +432,42 @@ export const GameScreen: React.FC<Props> = ({
     }
 
     setPlayer(prev => {
-      const newPlayer = { ...prev };
-      
-      switch (direction) {
-        case 'up':
-          if (!newPlayer.isJumping) {
-            newPlayer.isJumping = true;
-            newPlayer.velocity.y = GAME_CONFIG.JUMP_FORCE;
-          }
-          break;
-        case 'left':
-          newPlayer.lane = Math.max(0, newPlayer.lane - 1);
-          break;
-        case 'right':
-          newPlayer.lane = Math.min(GAME_CONFIG.LANES - 1, newPlayer.lane + 1);
-          break;
-        case 'down':
-          if (newPlayer.isJumping) {
-            newPlayer.velocity.y += 5;
-          }
-          break;
+      if (!prev.isJumping) {
+        return {
+          ...prev,
+          isJumping: true,
+          velocity: { ...prev.velocity, y: GAME_CONFIG.JUMP_FORCE }
+        };
       }
-      
-      return newPlayer;
+      return prev;
     });
   }, [gameState.isPaused, gameState.isGameOver, settings.vibrationEnabled]);
 
-  const handleJump = useCallback(() => {
-    handleMovement('up');
-  }, [handleMovement]);
-
   const handleMoveLeft = useCallback(() => {
-    handleMovement('left');
-  }, [handleMovement]);
+    if (gameState.isPaused || gameState.isGameOver) return;
+
+    if (settings.vibrationEnabled && Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+
+    setPlayer(prev => ({
+      ...prev,
+      lane: Math.max(0, prev.lane - 1)
+    }));
+  }, [gameState.isPaused, gameState.isGameOver, settings.vibrationEnabled]);
 
   const handleMoveRight = useCallback(() => {
-    handleMovement('right');
-  }, [handleMovement]);
+    if (gameState.isPaused || gameState.isGameOver) return;
+
+    if (settings.vibrationEnabled && Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+
+    setPlayer(prev => ({
+      ...prev,
+      lane: Math.min(GAME_CONFIG.LANES - 1, prev.lane + 1)
+    }));
+  }, [gameState.isPaused, gameState.isGameOver, settings.vibrationEnabled]);
 
   const pauseGame = useCallback(() => {
     setGameState(prev => ({ ...prev, isPaused: true }));
@@ -563,7 +523,6 @@ export const GameScreen: React.FC<Props> = ({
     setActivePowerUps([]);
     setParticles([]);
     setGameTime(0);
-    setLastObstacleSpawn(0);
     backgroundY.value = 0;
   }, [gameState, bestScore, totalCoins, difficultyConfig, selectedSkin, backgroundY]);
 
@@ -593,55 +552,68 @@ export const GameScreen: React.FC<Props> = ({
   return (
     <View style={styles.container}>
       <View style={styles.gameArea}>
-          <LinearGradient
-            colors={[currentBackground.from, currentBackground.to]}
-            style={StyleSheet.absoluteFillObject}
-          />
+        <LinearGradient
+          colors={[currentBackground.from, currentBackground.to]}
+          style={StyleSheet.absoluteFillObject}
+        />
 
-          <Animated.View style={[styles.backgroundPattern, backgroundStyle]} />
-
-          <HUD
-            score={gameState.score}
-            coins={gameState.coins}
-            lives={gameState.lives}
-            level={gameState.level}
-            activePowerUps={activePowerUps}
-            onPause={pauseGame}
-          />
-
-          <PlayerEmoji
-            player={player}
-            isShielded={activePowerUps.some(p => p.type === 'shield')}
-          />
-
-          {obstacles.map(obstacle => (
-            <ObstacleComponent key={obstacle.id} obstacle={obstacle} />
-          ))}
-
-          {powerUps.filter(p => !p.collected).map(powerUp => (
-            <PowerUpComponent key={powerUp.id} powerUp={powerUp} />
-          ))}
-
-          {coins.filter(c => !c.collected).map(coin => (
-            <CoinComponent key={coin.id} coin={coin} />
-          ))}
-
-          <ParticleSystem particles={particles} />
-
-          <TouchControls
-            onJump={handleJump}
-            onMoveLeft={handleMoveLeft}
-            onMoveRight={handleMoveRight}
-            disabled={gameState.isPaused || gameState.isGameOver}
-          />
-
-          {gameState.isPaused && (
-            <PauseMenu
-              onResume={resumeGame}
-              onRestart={restartGame}
-              onHome={onNavigateToMenu}
+        {/* Lane dividers */}
+        <View style={styles.laneContainer}>
+          {Array.from({ length: GAME_CONFIG.LANES - 1 }, (_, i) => (
+            <View 
+              key={i} 
+              style={[
+                styles.laneDivider, 
+                { left: ((i + 1) * SCREEN_WIDTH) / GAME_CONFIG.LANES }
+              ]} 
             />
-          )}
+          ))}
+        </View>
+
+        <Animated.View style={[styles.backgroundPattern, backgroundStyle]} />
+
+        <HUD
+          score={gameState.score}
+          coins={gameState.coins}
+          lives={gameState.lives}
+          level={gameState.level}
+          activePowerUps={activePowerUps}
+          onPause={pauseGame}
+        />
+
+        <PlayerEmoji
+          player={player}
+          isShielded={activePowerUps.some(p => p.type === 'shield')}
+        />
+
+        {obstacles.map(obstacle => (
+          <ObstacleComponent key={obstacle.id} obstacle={obstacle} />
+        ))}
+
+        {powerUps.filter(p => !p.collected).map(powerUp => (
+          <PowerUpComponent key={powerUp.id} powerUp={powerUp} />
+        ))}
+
+        {coins.filter(c => !c.collected).map(coin => (
+          <CoinComponent key={coin.id} coin={coin} />
+        ))}
+
+        <ParticleSystem particles={particles} />
+
+        <TouchControls
+          onJump={handleJump}
+          onMoveLeft={handleMoveLeft}
+          onMoveRight={handleMoveRight}
+          disabled={gameState.isPaused || gameState.isGameOver}
+        />
+
+        {gameState.isPaused && (
+          <PauseMenu
+            onResume={resumeGame}
+            onRestart={restartGame}
+            onHome={onNavigateToMenu}
+          />
+        )}
       </View>
     </View>
   );
@@ -660,5 +632,21 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT * 2,
     opacity: 0.1,
+  },
+  laneContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1,
+  },
+  laneDivider: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    opacity: 0.6,
   },
 });

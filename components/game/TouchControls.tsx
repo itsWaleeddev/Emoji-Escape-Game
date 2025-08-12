@@ -5,7 +5,6 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
-  withTiming,
 } from 'react-native-reanimated';
 
 interface Props {
@@ -63,38 +62,39 @@ export const TouchControls: React.FC<Props> = ({
 
   return (
     <View style={styles.container}>
-      {/* Lane Control Buttons */}
-      <View style={styles.laneControls}>
-        <Animated.View style={leftAnimatedStyle}>
-          <Pressable
-            style={[styles.laneButton, styles.leftButton]}
-            onPress={handleLeftPress}
-            disabled={disabled}
-          >
-            <ChevronLeft size={32} color="#FFFFFF" />
-          </Pressable>
-        </Animated.View>
-
-        <Animated.View style={rightAnimatedStyle}>
-          <Pressable
-            style={[styles.laneButton, styles.rightButton]}
-            onPress={handleRightPress}
-            disabled={disabled}
-          >
-            <ChevronRight size={32} color="#FFFFFF" />
-          </Pressable>
-        </Animated.View>
-      </View>
-
-      {/* Jump Button */}
-      <Animated.View style={[styles.jumpButtonContainer, jumpAnimatedStyle]}>
+      {/* Left Lane Button */}
+      <Animated.View style={leftAnimatedStyle}>
         <Pressable
-          style={styles.jumpButton}
+          style={[styles.laneButton, styles.leftButton]}
+          onPress={handleLeftPress}
+          disabled={disabled}
+        >
+          <ChevronLeft size={32} color="#FFFFFF" />
+          <Text style={styles.buttonLabel}>LEFT</Text>
+        </Pressable>
+      </Animated.View>
+
+      {/* Jump Button - Center */}
+      <Animated.View style={jumpAnimatedStyle}>
+        <Pressable
+          style={[styles.jumpButton]}
           onPress={handleJumpPress}
           disabled={disabled}
         >
           <ChevronUp size={36} color="#FFFFFF" />
           <Text style={styles.jumpText}>JUMP</Text>
+        </Pressable>
+      </Animated.View>
+
+      {/* Right Lane Button */}
+      <Animated.View style={rightAnimatedStyle}>
+        <Pressable
+          style={[styles.laneButton, styles.rightButton]}
+          onPress={handleRightPress}
+          disabled={disabled}
+        >
+          <ChevronRight size={32} color="#FFFFFF" />
+          <Text style={styles.buttonLabel}>RIGHT</Text>
         </Pressable>
       </Animated.View>
     </View>
@@ -108,22 +108,17 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'space-around',
     alignItems: 'flex-end',
-    paddingHorizontal: 30,
+    paddingHorizontal: 20,
     zIndex: 50,
   },
-  laneControls: {
-    flexDirection: 'row',
-    gap: 20,
-  },
   laneButton: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(59, 130, 246, 0.9)',
     borderWidth: 3,
     borderColor: 'rgba(255, 255, 255, 0.3)',
     shadowColor: '#000',
@@ -138,13 +133,10 @@ const styles = StyleSheet.create({
   rightButton: {
     backgroundColor: 'rgba(16, 185, 129, 0.9)',
   },
-  jumpButtonContainer: {
-    alignItems: 'center',
-  },
   jumpButton: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(245, 158, 11, 0.95)',
@@ -155,6 +147,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 12,
     elevation: 12,
+  },
+  buttonLabel: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+    marginTop: 2,
   },
   jumpText: {
     color: '#FFFFFF',
